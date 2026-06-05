@@ -1878,7 +1878,6 @@ function geoEtapaCap(eid){
 }
 
 function guardar(etapa){
-  // Map etapa name → eid
   const map={'almácigo':'alm','plantación':'plan','cultivo':'cult','cosecha':'cos','clasificado':'clas'};
   const eid=map[etapa];
   if(eid&&!geoEtapaCap(eid)){
@@ -1890,6 +1889,30 @@ function guardar(etapa){
       setTimeout(()=>{card.style.borderColor='';},3000);}
     return;
   }
+  // Persist visit data to localStorage for dashboard
+  const cfg = eid ? ETAPA_CFG[eid] : null;
+  const prodNom = cfg ? document.getElementById(cfg.nom).textContent : '—';
+  const cap2 = eid ? eid.charAt(0).toUpperCase()+eid.slice(1) : '';
+  const geoEl = eid ? document.getElementById('geo'+cap2) : null;
+  const coords = geoEl ? geoEl.textContent : '';
+  // Get active tipo tabaco pill
+  const pillMap = {alm:'almP',plan:'planP',cult:'cultP',cos:'cosP',clas:'clasP'};
+  const pillEl = eid ? document.querySelector('#'+pillMap[eid]+' .pill.active') : null;
+  const tipo = pillEl ? pillEl.textContent.trim() : '';
+  // Count visits
+  const visEl = cfg ? document.getElementById(cfg.list) : null;
+  const nVisits = visEl ? visEl.querySelectorAll('.visit-block').length : 0;
+  // Save registro
+  const key = 'tadeva_visitas';
+  let visitas = [];
+  try { visitas = JSON.parse(localStorage.getItem(key)||'[]'); } catch(e){}
+  visitas.push({
+    etapa, tipo, productor: prodNom,
+    coords, nVisits,
+    fecha: new Date().toISOString().slice(0,10),
+    ts: Date.now()
+  });
+  try { localStorage.setItem(key, JSON.stringify(visitas)); } catch(e){}
   alert('✅ Datos de '+etapa+' guardados correctamente.\n\nCampaña 2026-2027 — Tadeva GAP');
 }
 
@@ -1898,7 +1921,11 @@ function guardarContratacion(nueva){
   if(_prodContratActual){
     const p = _prodContratActual;
     if(!CONTRATADOS.find(x=>x.c===p.c)){
-      CONTRATADOS.push({c:p.c, n:p.n, o:p.o, t:p.t, up:p.up||''});
+      const cupo = parseInt(document.getElementById('cupoV').value)||0;
+      const geoEl = document.getElementById('g0');
+      const coords = geoEl ? geoEl.textContent : '';
+      const fecha = document.getElementById('fechaCont').value || new Date().toISOString().slice(0,10);
+      CONTRATADOS.push({c:p.c, n:p.n, o:p.o, t:p.t, up:p.up||'', cupo, coords, fecha});
       guardarContratados(CONTRATADOS);
     }
     actualizarContadorHome();
