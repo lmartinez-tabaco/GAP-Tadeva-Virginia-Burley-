@@ -289,6 +289,19 @@ function cargarDatos(){
   try{ contratados = JSON.parse(localStorage.getItem('tadeva_contratados')||'[]'); }catch(e){}
   try{ visitas     = JSON.parse(localStorage.getItem('tadeva_visitas')||'[]');     }catch(e){}
 
+  // Normalize all records on load — fix types, cupo, coords
+  contratados = contratados.map(p=>({
+    ...p,
+    cupo: parseInt(p.cupo)||0,
+    t: normTipo(p.t),
+    coords: (p.coords||'').trim()
+  }));
+  visitas = visitas.map(v=>({
+    ...v,
+    tipo: normTipo(v.tipo||''),
+    coords: (v.coords||'').trim()
+  }));
+
   document.getElementById('lastUpdate').textContent =
     'Actualizado: ' + new Date().toLocaleTimeString('es-AR');
 
@@ -305,6 +318,27 @@ function cargarDatos(){
   renderTabla(contratados);
 }
 
+// ——— Normalize tipo tabaco to 3 canonical values ———
+function normTipo(t){
+  if(!t) return 'Virginia';
+  const s = t.toLowerCase().replace(/[-_\s]/g,'');
+  if(s.includes('burley')) return 'Burley';
+  if(s.includes('org')) return 'Virginia Orgánico';
+  return 'Virginia';
+}
+
+// ——— Parse GPS coords from any format ———
+function parseCoords(str){
+  if(!str) return null;
+  // Remove emoji and extra whitespace
+  const clean = str.replace(/[^\x00-\x7F]/g,' ').trim();
+  const m = clean.match(/[Ll]at[:\s]+([-\d.]+)[^-\d.]+([-\d.]+)/);
+  if(m) return {lat:parseFloat(m[1]), lng:parseFloat(m[2])};
+  // Try simpler pattern
+  const m2 = str.match(/([-\d.]{4,})[^\d-]+([-\d.]{4,})/);
+  return m2 ? {lat:parseFloat(m2[1]), lng:parseFloat(m2[2])} : null;
+}
+
 // ——— KPIs ———
 function actualizarKPIs(contratados, visitas){
   document.getElementById('kpiTotal').textContent = contratados.length;
@@ -319,7 +353,7 @@ function actualizarKPIs(contratados, visitas){
 
   document.getElementById('kpiVisitas').textContent = visitas.length;
 
-  const conGeo = contratados.filter(p=>p.coords && p.coords.includes('Lat:')).length;
+  const conGeo = contratados.filter(p=> parseCoords(p.coords) !== null).length;
   document.getElementById('kpiGeo').textContent = conGeo;
 }
 
@@ -408,11 +442,22 @@ function renderChartEtapas(data){
 function renderChartCupoP(data){
   const cupos = {};
   data.forEach(p=>{
+    if(!p.cupo) return; // skip zero cupo
     const o = p.o==='tucuman'?'Tucumán': p.o.charAt(0).toUpperCase()+p.o.slice(1);
-    cupos[o] = (cupos[o]||0) + (p.cupo||0);
+    cupos[o] = (cupos[o]||0) + p.cupo;
   });
   const labels = Object.keys(cupos);
   const values = labels.map(k=>cupos[k]);
+  if(!labels.length){
+    // Show empty placeholder
+    const ctx = getCtx('chartCupoP');
+    charts['chartCupoP'] = new Chart(ctx,{
+      type:'bar',
+      data:{labels:['Sin datos'],datasets:[{data:[0],backgroundColor:'#eef1f6'}]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true},x:{grid:{display:false}}}}
+    });
+    return;
+  }
   charts['chartCupoP'] = new Chart(getCtx('chartCupoP'),{
     type:'bar',
     data:{ labels, datasets:[{ label:'Cupo (kg)', data:values, backgroundColor:PROV_COLORS.slice(0,labels.length), borderRadius:6, borderSkipped:false }] },
@@ -425,20 +470,23 @@ function renderChartCupoP(data){
 
 // ——— Chart: visitas por tipo tabaco (donut) ———
 function renderChartVisTipo(data){
+  // Use normalized tipo (already done in cargarDatos)
   const counts = {'Virginia':0,'Virginia Orgánico':0,'Burley':0};
-  data.forEach(v=>{
-    const t = v.tipo;
-    if(counts[t]!==undefined) counts[t]++;
-  });
+  data.forEach(v=>{ if(counts[v.tipo]!==undefined) counts[v.tipo]++; });
   const labels = Object.keys(counts).filter(k=>counts[k]>0);
   const values = labels.map(k=>counts[k]);
+  const colors = labels.map(l=>l==='Burley'?'#BA7517':l==='Virginia Orgánico'?'#3B6D11':'#1a3a6b');
   if(!values.length){
-    // draw empty
-    labels.push('Sin datos'); values.push(1);
+    charts['chartVisTipo'] = new Chart(getCtx('chartVisTipo'),{
+      type:'doughnut',
+      data:{labels:['Sin visitas'],datasets:[{data:[1],backgroundColor:['#eef1f6'],borderWidth:0}]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{font:{size:11}}}}}
+    });
+    return;
   }
   charts['chartVisTipo'] = new Chart(getCtx('chartVisTipo'),{
     type:'doughnut',
-    data:{ labels, datasets:[{ data:values, backgroundColor: values.length===1?['#dde3ec']:TIPO_COLORS, borderWidth:2, borderColor:'#fff', hoverOffset:6 }] },
+    data:{ labels, datasets:[{ data:values, backgroundColor:colors, borderWidth:2, borderColor:'#fff', hoverOffset:6 }] },
     options:{ responsive:true, maintainAspectRatio:false,
       plugins:{ legend:{ position:'bottom', labels:{ font:{size:11}, padding:12 } } } }
   });
@@ -473,15 +521,8 @@ let leafletMap = null;
 
 function renderMapa(contratados, visitas){
   const mapEl = document.getElementById('mapWrap');
-
-  // Parse coords helper — handles "📍 Lat: -24.123 | Lng: -65.456" format
-  function parseCoords(str){
-    if(!str || !str.includes('Lat:')) return null;
-    const m = str.match(/Lat:\s*([-\d.]+)\s*[|·]\s*Lng:\s*([-\d.]+)/);
-    return m ? {lat:parseFloat(m[1]), lng:parseFloat(m[2])} : null;
-  }
-
   const puntos = [];
+
   contratados.forEach(p=>{
     const c = parseCoords(p.coords);
     if(c) puntos.push({...c, tipo:p.t, nom:p.n, fuente:'Contratación'});
@@ -554,16 +595,20 @@ function buildMap(puntos, mapEl){
 
 // ——— Coords list below map ———
 function renderCoordsList(contratados){
-  const withGeo = contratados.filter(p=>p.coords && p.coords.includes('Lat:'));
+  const withGeo = contratados.filter(p=> parseCoords(p.coords) !== null);
   const el = document.getElementById('coordsList');
   if(!el) return;
-  if(!withGeo.length){el.innerHTML='<p style="font-size:12px;color:var(--texto2);padding:8px 0">Ningún productor con coordenadas aún.</p>';return;}
+  if(!withGeo.length){
+    el.innerHTML='<p style="font-size:12px;color:var(--texto2);padding:8px 0">Ningún productor con coordenadas aún.</p>';
+    return;
+  }
   el.innerHTML = withGeo.map(p=>{
-    const tipoBadge = p.t==='Burley'?'badge-b':p.t==='Virginia-Organico'?'badge-o':'badge-v';
-    const tipoLabel = p.t==='Virginia-Organico'?'V. Org.':p.t;
+    const tipoBadge = p.t==='Burley'?'badge-b':p.t==='Virginia Orgánico'?'badge-o':'badge-v';
+    const tipoLabel = p.t==='Virginia Orgánico'?'V. Org.':p.t;
+    const coordsClean = p.coords.replace(/[^\x20-\x7E]/g,'').trim().replace(/\s+/g,' ');
     return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--borde);font-size:12px;gap:8px;flex-wrap:wrap">
       <span><strong>${p.n}</strong> <span class="badge ${tipoBadge}" style="margin-left:4px">${tipoLabel}</span></span>
-      <span style="font-size:10px;color:var(--texto2);font-family:monospace">${p.coords.replace('📍 ','')}</span>
+      <span style="font-size:10px;color:var(--texto2);font-family:monospace">${coordsClean}</span>
     </div>`;
   }).join('');
 }
