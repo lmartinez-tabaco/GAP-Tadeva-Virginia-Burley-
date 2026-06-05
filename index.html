@@ -1917,17 +1917,21 @@ function guardar(etapa){
 }
 
 function guardarContratacion(nueva){
-  // Usar el productor guardado en la variable global al momento de selección
   if(_prodContratActual){
     const p = _prodContratActual;
-    if(!CONTRATADOS.find(x=>x.c===p.c)){
-      const cupo = parseInt(document.getElementById('cupoV').value)||0;
-      const geoEl = document.getElementById('g0');
-      const coords = geoEl ? geoEl.textContent : '';
-      const fecha = document.getElementById('fechaCont').value || new Date().toISOString().slice(0,10);
-      CONTRATADOS.push({c:p.c, n:p.n, o:p.o, t:p.t, up:p.up||'', cupo, coords, fecha});
-      guardarContratados(CONTRATADOS);
+    const cupo = parseInt(document.getElementById('cupoV').value)||0;
+    const geoEl = document.getElementById('g0');
+    const coords = geoEl ? geoEl.textContent.trim() : '';
+    const fecha = document.getElementById('fechaCont').value || new Date().toISOString().slice(0,10);
+    const idx = CONTRATADOS.findIndex(x=>x.c===p.c);
+    const registro = {c:p.c, n:p.n, o:p.o, t:p.t, up:p.up||'', cupo, coords, fecha};
+    if(idx>=0){
+      // Actualizar registro existente con nuevos datos
+      CONTRATADOS[idx] = registro;
+    } else {
+      CONTRATADOS.push(registro);
     }
+    guardarContratados(CONTRATADOS);
     actualizarContadorHome();
   }
   alert('✅ Contratación guardada.\n\n' +
